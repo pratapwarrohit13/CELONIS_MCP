@@ -1,65 +1,225 @@
 # Celonis MCP Client
 
-This script (`celonis_mcp.py`) is a Python client for connecting to a Celonis Model Context Protocol (MCP) server. It supports OAuth2 authentication and Server-Sent Events (SSE) for protocol communication.
+A Python client for interacting with Celonis Model Context Protocol (MCP) servers. Execute tools to search data, get insights, and load data from your Celonis environment via JSON-RPC 2.0 protocol with OAuth2 authentication and Server-Sent Events (SSE).
+
+## Features
+
+- ✅ **OAuth2 Authentication** - Client Credentials flow with `mcp-asset.tools:execute` scope
+- ✅ **JSON-RPC 2.0** - Standard protocol for tool invocation
+- ✅ **Server-Sent Events** - Real-time communication with Celonis servers
+- ✅ **Multiple Tools** - Access to `search_data`, `get_insights`, and `load_data` tools
+- ✅ **Flexible Filtering** - String, numeric, date, and null filters for data queries
+- ✅ **Pagination Support** - Handle large datasets with page-based retrieval
 
 ## Prerequisites
 
-- Python 3.x
-- `requests` library
+- **Python 3.7+**
+- **Celonis Account** with MCP server access
+- **OAuth2 Credentials** (Client ID and Client Secret)
+- **MCP Server Endpoint URL** (from your Celonis team)
 
-## Installation
+## Quick Start
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 1. Installation
 
-## Configuration
-
-Create a `.env` file in the same directory with your credentials:
-
-```env
-CELONIS_ENDPOINT_URL=https://[TEAM].celonis.cloud/studio-copilot/api/v1/mcp-servers/mcp/[SERVER_ID]
-CELONIS_API_KEY=[YOUR_API_KEY]
-# OR for OAuth2:
-# CELONIS_CLIENT_ID=[CLIENT_ID]
-# CELONIS_CLIENT_SECRET=[CLIENT_SECRET]
+Clone or download the repository:
+```powershell
+cd C:\path\to\CELONIS_MCP
 ```
 
-## Usage
+Create and activate a virtual environment:
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
 
-### 1. Connection Verification (List Tools)
-Run the script without arguments to use the configuration from `.env`:
+Install dependencies:
+```powershell
+pip install -r requirements.txt
+```
 
-```bash
+### 2. Configuration
+
+Create a `.env` file in the project root:
+
+```env
+# OAuth2 Credentials (required)
+CELONIS_CLIENT_ID=your-client-id
+CELONIS_CLIENT_SECRET=your-client-secret
+
+# MCP Server Endpoint (required)
+CELONIS_ENDPOINT_URL=https://your-team.celonis.cloud/studio-copilot/api/v1/mcp-servers/mcp/your-asset-id
+```
+
+### 3. List Available Tools
+
+```powershell
 python celonis_mcp.py --action list
 ```
 
-### 2. Call a Tool
-To execute a specific tool:
+### 4. Call a Tool
 
-```bash
-python celonis_mcp.py \
-  --action call \
-  --tool-name "tool_name" \
-  --tool-args '{"arg1": "value"}'
+**Search for data:**
+```powershell
+python celonis_mcp.py --action call --tool-name "search_data" --tool-args '{
+  "search_terms": ["vendor", "payment"],
+  "user_query": "Find vendor and payment data"
+}'
 ```
 
-You can still override settings via CLI arguments if needed:
+**Load data:**
+```powershell
+python celonis_mcp.py --action call --tool-name "load_data" --tool-args '{
+  "columns": ["VENDOR.NAME", "INVOICE.AMOUNT"],
+  "page_size": 50
+}'
+```
 
-## Current Status & Known Issues
+**Get insights:**
+```powershell
+python celonis_mcp.py --action call --tool-name "get_insights" --tool-args '{
+  "kpi": "VENDOR.PAYMENT_RATE",
+  "field_ids": ["VENDOR.REGION"]
+}'
+```
 
-### ✅ Authentication
-- **Status**: Working.
-- **Details**: Uses OAuth2 Client Credentials flow with scope `mcp-asset.tools:execute`.
+## Documentation
 
-### ⚠️ Connection Handshake
-- **Status**: Partially Working / Blocked.
-- **Details**: The client successfully connects to the SSE stream and receives heartbeat pings.
-- **Blocker**: The server **does not send the `endpoint` event** required by the MCP protocol to tell the client where to send POST requests.
-- **Result**: The script will connect, log `Connecting to SSE...`, and then time out with `Timeout waiting for endpoint from SSE.`
+Refer to the detailed guides in this repository:
 
-### Troubleshooting
-- **Timeout**: If you see a timeout, it means the server is reachable but not sending the required initialization event.
-- **401 Unauthorized**: Check your Client ID and Secret.
-- **403 Forbidden**: Ensure your ID has the correct permissions/scopes.
+- **[USER_GUIDE.md](USER_GUIDE.md)** - Complete usage guide with examples and troubleshooting
+- **[MCP_INPUT_OUTPUT.md](MCP_INPUT_OUTPUT.md)** - Input/output specifications for each tool
+
+## Available Tools
+
+| Tool | Purpose | Input | Output |
+|------|---------|-------|--------|
+| `search_data` | Discover KPIs and record attributes | `search_terms`, `user_query` | `search_result` (string) |
+| `get_insights` | Get business insights on KPIs | `kpi`, `field_ids`, optional filters | `insights` (string) |
+| `load_data` | Retrieve paginated data | `columns`, optional pagination/filters | `data_frame_content` (table) |
+
+## Usage Examples
+
+### Example 1: Search and Load Workflow
+
+```powershell
+# Step 1: Discover available fields
+python celonis_mcp.py --action call --tool-name "search_data" --tool-args '{
+  "search_terms": ["invoice", "vendor"],
+  "user_query": "Find invoice and vendor fields"
+}'
+
+# Step 2: Load data using discovered field IDs
+python celonis_mcp.py --action call --tool-name "load_data" --tool-args '{
+  "columns": ["INVOICE.ID", "VENDOR.NAME", "INVOICE.AMOUNT"],
+  "page_size": 100
+}'
+```
+
+### Example 2: Filtered Data Query
+
+```powershell
+python celonis_mcp.py --action call --tool-name "load_data" --tool-args '{
+  "columns": ["VENDOR.NAME", "INVOICE.AMOUNT", "PAYMENT.DATE"],
+  "applied_filters": {
+    "numeric_filters": [
+      {
+        "column_id": "INVOICE.AMOUNT",
+        "value": 1000,
+        "comparator": ">"
+      }
+    ]
+  },
+  "order_by": "INVOICE.AMOUNT",
+  "ascending": false,
+  "page_size": 50
+}'
+```
+
+## Command-Line Arguments
+
+```
+--action {list,call}           Action to perform (default: list)
+--tool-name TOOL_NAME          Name of tool to call (required for --action call)
+--tool-args JSON_STRING        JSON arguments for tool (required for --action call)
+--oauth ID SECRET              Override OAuth credentials via CLI
+--endpoint-url URL             Override endpoint URL via CLI
+--team-info TEAM_URL SERVER_ID Override team URL and server ID via CLI
+--api-key KEY                  Use legacy API key instead of OAuth2
+```
+
+## Authentication
+
+The client uses **OAuth2 Client Credentials flow**:
+
+1. Client sends credentials to `https://your-team.celonis.cloud/oauth2/token`
+2. Server returns `access_token` with scope `mcp-asset.tools:execute`
+3. Client includes token in `Authorization: Bearer <token>` header for all requests
+4. Token is valid for the duration of the session
+
+## Response Format
+
+All responses follow **JSON-RPC 2.0** standard:
+
+**Success:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "result": { "tool_output": "..." }
+}
+```
+
+**Error:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "error": {
+    "code": -32600,
+    "message": "Error description"
+  }
+}
+```
+
+## Troubleshooting
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `OAuth Authentication Failed` | Invalid credentials | Verify Client ID and Secret in `.env` |
+| `SSE Connection Error` | Network or endpoint issue | Check endpoint URL and network connectivity |
+| `Timeout waiting for RPC response` | Tool execution timeout | Verify tool name and arguments; check network |
+| `Invalid JSON args` | Malformed JSON | Use double quotes in JSON; validate syntax |
+| `Column IDs not found` | Wrong ID format | Use `search_data` first to discover IDs |
+
+For detailed troubleshooting, see [USER_GUIDE.md - Troubleshooting](USER_GUIDE.md#troubleshooting).
+
+## Project Structure
+
+```
+CELONIS_MCP/
+├── celonis_mcp.py              # Main client script
+├── requirements.txt             # Python dependencies
+├── .env                         # Configuration file (not in git)
+├── .gitignore                   # Git ignore rules
+├── README.md                    # This file
+├── USER_GUIDE.md                # Comprehensive user guide
+└── MCP_INPUT_OUTPUT.md          # Input/output reference
+```
+
+## Status
+
+✅ **Fully Functional**
+
+- ✅ Authentication: Working
+- ✅ Connection: Working
+- ✅ Tool Execution: Working
+- ✅ Response Parsing: Working
+- ✅ Error Handling: Implemented
+
+## Support
+
+- Check [USER_GUIDE.md](USER_GUIDE.md) for detailed documentation
+- Review [MCP_INPUT_OUTPUT.md](MCP_INPUT_OUTPUT.md) for API specifications
+- Check error messages and stack traces for debugging
+- Verify `.env` configuration and endpoint availability

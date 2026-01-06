@@ -5,7 +5,7 @@ import uuid
 import sys
 import threading
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 class CelonisMCPClient:
     """
@@ -33,13 +33,17 @@ class CelonisMCPClient:
         """
         # Determine Base URL and Endpoint
         if endpoint_url:
-            self.endpoint = endpoint_url
-            parsed = requests.utils.urlparse(endpoint_url)
+            # Add ?draft=false query parameter if not already present
+            if '?' not in endpoint_url:
+                self.endpoint = f"{endpoint_url}?draft=false"
+            else:
+                self.endpoint = endpoint_url
+            parsed = urlparse(endpoint_url)
             self.base_url = f"{parsed.scheme}://{parsed.netloc}"
         elif team_url and server_id:
             self.base_url = team_url.rstrip('/')
             self.server_id = server_id
-            self.endpoint = f"{self.base_url}/studio-copilot/api/v1/mcp-servers/mcp/{self.server_id}"
+            self.endpoint = f"{self.base_url}/studio-copilot/api/v1/mcp-servers/mcp/{self.server_id}?draft=false"
         else:
             raise ValueError("Configuration Error: Missing endpoint details.")
 
@@ -80,6 +84,7 @@ class CelonisMCPClient:
             "client_secret": client_secret,
             "scope": "mcp-asset.tools:execute"  # Must include this scope
         }
+        response = None
         try:
             print(f"Authenticating via OAuth2... ({token_url})")
             response = requests.post(token_url, data=payload)
@@ -88,32 +93,31 @@ class CelonisMCPClient:
         except Exception as e:
             print(f"OAuth Authentication Failed: {e}", file=sys.stderr)
             # Inspect response body for more detail if available
-            if 'response' in locals() and response.content:
-                 print(f"Auth Error Body: {response.text}", file=sys.stderr)
+            if response is not None:
+                try:
+                    print(f"Auth Error Body: {response.text}", file=sys.stderr)
+                except:
+                    pass
             sys.exit(1)
 
     def connect(self):
         """
         Connects to the SSE stream and starts the listener thread.
-        Waits until the POST endpoint is discovered.
-        
-        BLOCKING behavior: This method blocks until the 'endpoint' event is received.
-        If the server does not send it within the timeout, the script exits.
+        For Celonis, the POST endpoint is the same as the GET endpoint.
         """
         print(f"Connecting to SSE at {self.endpoint}...")
         
-        # Start background thread to read the stream
+        # For Celonis MCP, use the same endpoint for both GET (SSE) and POST (commands)
+        self.post_endpoint = self.endpoint
+        print(f"Using POST Endpoint: {self.post_endpoint}")
+        
+        # Start background thread to read the stream for responses
         self.sse_thread = threading.Thread(target=self._listen_sse, daemon=True)
         self.sse_thread.start()
         
-        print("Waiting for 'endpoint' event from server...", flush=True)
-        if not self.endpoint_found.wait(timeout=10):
-            print("ERROR: Timeout waiting for endpoint from SSE.", file=sys.stderr)
-            print("Troubleshooting: The server accepted the connection but didn't send the 'endpoint' event.", file=sys.stderr)
-            print("               Check if the server URL is correct or if the server is healthy.", file=sys.stderr)
-            sys.exit(1)
-            
-        print(f"Connected. POST Endpoint: {self.post_endpoint}")
+        # Give it a moment to establish the connection
+        time.sleep(1)
+        print("Connected.")
 
     def _listen_sse(self):
         """
@@ -124,12 +128,12 @@ class CelonisMCPClient:
         """
         print("Starting SSE listener thread...")
         headers = self.headers.copy()
-        headers["Accept"] = "text/event-stream"
+        # Celonis requires both application/json and text/event-stream
+        headers["Accept"] = "application/json, text/event-stream"
         # Content-Type SHOULD NOT be present for GET requests, removing it ensures header correctness
         headers.pop("Content-Type", None) 
         
         try:
-            print(f"Requesting GET {self.endpoint}...")
             # stream=True is critical for SSE to keep connection open
             response = requests.get(self.endpoint, headers=headers, stream=True)
             response.raise_for_status()
@@ -179,10 +183,6 @@ class CelonisMCPClient:
             print(f"SSE Connection Error: {e}", file=sys.stderr)
             self.shutdown_event.set()
 
-        except Exception as e:
-            print(f"SSE Connection Error: {e}", file=sys.stderr)
-            self.shutdown_event.set()
-
     def _handle_rpc_response(self, msg):
         req_id = msg.get("id")
         if req_id in self.pending_requests:
@@ -192,8 +192,8 @@ class CelonisMCPClient:
 
     def _send_json_rpc(self, method, params=None):
         """
-        Sends a JSON-RPC 2.0 request to the discovered POST endpoint.
-        Uses a threading.Event to block and wait for the asynchronous response from the SSE thread.
+        Sends a JSON-RPC 2.0 request to the endpoint.
+        Celonis returns responses synchronously in SSE format in the HTTP response body.
         """
         req_id = str(uuid.uuid4())
         payload = {
@@ -203,34 +203,53 @@ class CelonisMCPClient:
         }
         if params is not None:
             payload["params"] = params
-            
-        # Create a molecular Wait Event for this specific request ID
-        event = threading.Event()
-        container = {}
-        self.pending_requests[req_id] = (event, container)
         
+        response = None
         try:
             if not self.post_endpoint:
-                raise RuntimeError("Cannot send Request: POST endpoint not yet discovered via SSE.")
-
-            response = requests.post(self.post_endpoint, headers=self.headers, json=payload)
+                raise RuntimeError("POST endpoint not set. Call connect() first.")
+            
+            # Celonis requires both application/json and text/event-stream in Accept header
+            headers = self.headers.copy()
+            headers["Accept"] = "application/json, text/event-stream"
+            
+            response = requests.post(self.post_endpoint, headers=headers, json=payload)
             response.raise_for_status()
             
-            # Request sent successfully, now wait for the result via SSE
-            if not event.wait(timeout=30):
-                print(f"Timeout waiting for RPC response to {method} (id: {req_id})", file=sys.stderr)
-                return None
-                
-            return container.get('response', {}).get('result')
+            # Parse SSE-formatted response from the body
+            # Expected format: "event: message\ndata: {json}\n"
+            response_text = response.text
+            result = self._parse_sse_response(response_text)
+            return result
 
         except Exception as e:
             print(f"RPC Call Failed: {e}", file=sys.stderr)
-            if 'response' in locals():
-                print(f"Response: {response.text}", file=sys.stderr)
+            if response is not None:
+                try:
+                    print(f"Response: {response.text}", file=sys.stderr)
+                except:
+                    pass
             return None
-        finally:
-            # Cleanup pending request map
-            self.pending_requests.pop(req_id, None)
+
+    def _parse_sse_response(self, sse_text):
+        """
+        Parse SSE-formatted response body.
+        Format: "event: message\ndata: {json}\n"
+        """
+        lines = sse_text.strip().split('\n')
+        for line in lines:
+            if line.startswith('data: '):
+                data_content = line[6:].strip()
+                try:
+                    msg = json.loads(data_content)
+                    if 'result' in msg:
+                        return msg['result']
+                    elif 'error' in msg:
+                        print(f"JSON-RPC Error: {msg['error']}", file=sys.stderr)
+                        return None
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse JSON: {e}", file=sys.stderr)
+        return None
 
     def list_tools(self):
         if not self.post_endpoint:
@@ -339,9 +358,6 @@ def main():
     except KeyboardInterrupt:
         print("\nExiting...")
         client.shutdown_event.set()
-    finally:
-        # Force exit to kill daemon threads if needed, though daemon=True handles it
-        pass
 
 if __name__ == "__main__":
     main()
