@@ -286,19 +286,28 @@ def main():
 
     args = parser.parse_args()
 
-    # Parse Auth
-    # Priority: 1. CLI Args, 2. Environment Variables
+    # ============================================
+    # AUTHENTICATION CONFIGURATION
+    # ============================================
+    # Priority: 1. CLI Arguments, 2. .env file
+    # 
+    # .env Variables Mapped:
+    # - CELONIS_API_KEY       → api_key (legacy auth)
+    # - CELONIS_CLIENT_ID     → client_id (OAuth2)
+    # - CELONIS_CLIENT_SECRET → client_secret (OAuth2)
+    # ============================================
+    
     api_key = args.api_key
     client_id, client_secret = args.oauth if args.oauth else (None, None)
     
-    # Load from Env if not provided in CLI
+    # Load from .env if not provided in CLI
     if not api_key and not (client_id and client_secret):
         try:
             from dotenv import load_dotenv
             import os
-            load_dotenv()
+            load_dotenv()  # Reads .env file from current directory
             
-            # Try Env Vars
+            # Map environment variables
             api_key = os.getenv("CELONIS_API_KEY")
             if not api_key:
                 client_id = os.getenv("CELONIS_CLIENT_ID")
@@ -306,15 +315,28 @@ def main():
         except ImportError:
             print("Warning: python-dotenv not installed. Skipping .env loading.")
     
-    # Parse Connection
+    # ============================================
+    # ENDPOINT CONFIGURATION
+    # ============================================
+    # Priority: 1. CLI Arguments, 2. .env file
+    # 
+    # .env Variables Mapped:
+    # - CELONIS_ENDPOINT_URL  → endpoint_url (full URL)
+    # - CELONIS_TEAM_URL      → team_url (alternative)
+    # - CELONIS_SERVER_ID     → server_id (alternative)
+    # ============================================
+    
     team_url, server_id = args.team_info if args.team_info else (None, None)
     endpoint_url = args.endpoint_url
     
+    # Load from .env if not provided in CLI
     if not endpoint_url and not (team_url and server_id):
         try:
             from dotenv import load_dotenv
             import os
-            load_dotenv()
+            load_dotenv()  # Reads .env file from current directory
+            
+            # Map environment variable
             endpoint_url = os.getenv("CELONIS_ENDPOINT_URL")
         except ImportError:
             pass
